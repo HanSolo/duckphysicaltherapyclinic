@@ -33,21 +33,26 @@ public class ClinicService {
 
 
     // ******************** Catalogue ********************
+    // @Transactional also activates the request context, which the agent needs: it calls these from its own thread, outside any HTTP request.
+    @Transactional
     public TreatmentList listTreatments() {
         final List<TreatmentView> list = Treatment.<Treatment>listAll().stream().map(this::toView).toList();
         return new TreatmentList(list.size(), list);
     }
 
+    @Transactional
     public TherapistList listTherapists() {
         final List<TherapistView> list = Therapist.<Therapist>listAll().stream().map(this::toView).toList();
         return new TherapistList(list.size(), list);
     }
 
+    @Transactional
     public OwnerList listOwners() {
         final List<OwnerView> list = Owner.<Owner>listAll().stream().map(this::toView).toList();
         return new OwnerList(list.size(), list);
     }
 
+    @Transactional
     public DuckList listDucks(final Long ownerId) {
         if (ownerId != null) { requireOwner(ownerId); }
         final List<Duck> ducks = ownerId == null ? Duck.listAll() : Duck.list("ownerId", ownerId);

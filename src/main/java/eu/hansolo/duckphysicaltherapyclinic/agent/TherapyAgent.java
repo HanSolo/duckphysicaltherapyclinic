@@ -197,9 +197,37 @@ public class TherapyAgent {
         args.put("referralId", r.referralId()).put("ownerLastName", r.ownerLastName()).put("duckName", f.duck().name()).put("provider", "Duck Physical Therapy Clinic").put("treatmentName", c.treatment().name()).put("diagnosis", r.diagnosis());
         args.put("sessions", slots.size()).put("pricePerSession", c.treatment().price().doubleValue()).put("firstSession", slots.get(0).toLocalDate().toString());
         log.say(r.referralId(), "Insurance Agent", "REQUEST", "Will you pay for " + slots.size() + " x " + c.treatment().name() + " at " + c.treatment().price() + " EUR for " + f.duck().name() + " (owner " + r.ownerLastName() + "), first session " + slots.get(0).toLocalDate() + "? I attach no referral document unless you ask for it.");
-        final JsonNode answer = mcp.call(insurerUrl, "therapy-agent:" + secret, "request_preauthorization", args, LONG, (key, request) -> insurerQuestions(r, key, request));
+        JsonNode answer;
+        try {
+            answer = mcp.call(insurerUrl, "therapy-agent:" + secret, "request_preauthorization", args, LONG, (key, request) -> insurerQuestions(r, key, request));
+        } catch (IllegalStateException e) {
+            // The insurer's model may think longer than a connection is kept open. The insurer finishes anyway and stores its answer, so ask for the stored answer
+            log.say(r.referralId(), null, "THOUGHT", "The connection to the insurer broke while it was still thinking (" + e.getMessage() + "). It stores its answer, so I will ask for it.");
+            answer = awaitPreauthorization(r);
+        }
         if (answer.path("status").asText().equals("NEEDS_INFO")) { throw new Refused("NOT_COVERED", "The insurer needs more information than we can give: " + answer.path("reason").asText()); }
         return answer;
+    }
+
+    /** Asks get_preauthorization every few seconds until the insurer's agent has stored its answer, for at most four minutes. */
+    private JsonNode awaitPreauthorization(final Referral r) {
+        final ObjectNode args     = mapper.createObjectNode().put("referralId", r.referralId());
+        final long       deadline = System.currentTimeMillis() + 240_000L;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(5_000L);
+                final JsonNode stored = mcp.call(insurerUrl, "therapy-agent:" + secret, "get_preauthorization", args, SHORT);
+                if (stored.hasNonNull("status")) { return stored; }
+            } catch (McpCallException e) {
+                // no answer stored yet: keep waiting
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for the insurer", e);
+            } catch (IllegalStateException e) {
+                // the insurer is still not reachable: keep trying until the deadline
+            }
+        }
+        throw new IllegalStateException("The insurer did not answer within four minutes");
     }
 
     /** The insurer's question inside request_preauthorization. Only the referral document is answered, anything else is declined. */
