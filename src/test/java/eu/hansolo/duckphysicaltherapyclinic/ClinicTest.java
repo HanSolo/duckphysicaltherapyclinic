@@ -18,7 +18,7 @@ import static org.hamcrest.Matchers.greaterThan;
 @QuarkusTest
 class ClinicTest {
     private static final String VERSION = "2026-07-28";
-    private static final String META    = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"" + VERSION + "\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}";
+    private static final String META    = "\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"" + VERSION + "\",\"io.modelcontextprotocol/clientInfo\":{\"name\":\"test\",\"version\":\"1\"},\"io.modelcontextprotocol/clientCapabilities\":{}}";
 
 
     /** One stateless MCP request: no initialize, no session, version and routing info in headers and _meta. */
