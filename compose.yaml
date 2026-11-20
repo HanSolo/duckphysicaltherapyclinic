@@ -1,0 +1,13 @@
+services:
+  duckphysicaltherapyclinic:
+    build: .
+    image: duckphysicaltherapyclinic:latest
+    container_name: duckphysicaltherapyclinic
+    ports:
+      - "8082:8082"          # REST API (/api) and MCP endpoint (/mcp)
+    volumes:
+      - clinic-data:/data    # H2 database file, survives container restarts
+    restart: unless-stopped
+
+volumes:
+  clinic-data:
