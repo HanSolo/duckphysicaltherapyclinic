@@ -86,6 +86,30 @@ public class ClinicService {
         return toView(appointment);
     }
 
+    /**
+     * Marks a booked appointment as completed. For the demo this is allowed before the start time too, so that a whole treatment can be shown in a few minutes.
+     */
+    @Transactional
+    public AppointmentView complete(final Long appointmentId) {
+        final Appointment appointment = Appointment.findById(appointmentId);
+        if (appointment == null) { throw ClinicException.notFound("Appointment", appointmentId); }
+        if (appointment.status != AppointmentStatus.BOOKED) { throw ClinicException.invalid("Only a booked appointment can be completed, this one is " + appointment.status); }
+        appointment.status = AppointmentStatus.COMPLETED;
+        return toView(appointment);
+    }
+
+    /** Is the slot inside opening hours and free for the therapist and the duck? The same rules as {@link #book}, answered with true or false. */
+    @Transactional
+    public boolean isFree(final Long duckId, final Long therapistId, final Long treatmentId, final LocalDateTime startTime) {
+        final Treatment     treatment = requireTreatment(treatmentId);
+        final LocalDateTime start     = startTime.withSecond(0).withNano(0);
+        final LocalDateTime end       = start.plusMinutes(treatment.durationMinutes);
+        if (!start.isAfter(LocalDateTime.now()) || start.getDayOfWeek() == DayOfWeek.SATURDAY || start.getDayOfWeek() == DayOfWeek.SUNDAY) { return false; }
+        if (start.toLocalTime().isBefore(OPENING_TIME) || end.toLocalDate().isAfter(start.toLocalDate()) || end.toLocalTime().isAfter(CLOSING_TIME)) { return false; }
+        return Appointment.count("therapistId = ?1 and status = ?2 and startTime < ?3 and endTime > ?4", therapistId, AppointmentStatus.BOOKED, end, start) == 0
+            && Appointment.count("duckId = ?1 and status = ?2 and startTime < ?3 and endTime > ?4", duckId, AppointmentStatus.BOOKED, end, start) == 0;
+    }
+
     @Transactional
     public AppointmentView get(final Long appointmentId) {
         final Appointment appointment = Appointment.findById(appointmentId);

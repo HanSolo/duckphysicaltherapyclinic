@@ -7,6 +7,18 @@ services:
       - "8082:8082"          # REST API (/api) and MCP endpoint (/mcp)
     volumes:
       - clinic-data:/data    # H2 database file, survives container restarts
+    # Model settings of the agent (LLM_BASE_URL, LLM_MODEL), the same names as in DuckInsurance and the DuckClinic. Needs Docker Compose 2.24 or newer for 'required: false'.
+    env_file:
+      - path: llm.env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach Ollama and the other applications on the host (needed on Linux, harmless elsewhere)
+    environment:
+      # The other two agents, on the host: DuckInsurance (published on 8081) and the DuckClinic (8080)
+      INSURER_MCP_URL: http://host.docker.internal:8081/api/mcp
+      DUCKCLINIC_MCP_URL: http://host.docker.internal:8080/duck-clinic/api/mcp
+      # Shared secret for the insurer's partner tools (demo value, the same as in DuckInsurance)
+      AGENT_SECRET: ${AGENT_SECRET:-duck-agent-demo}
     restart: unless-stopped
 
 volumes:

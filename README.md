@@ -63,3 +63,8 @@ curl -s localhost:8082/api/appointments -H 'Content-Type: application/json' \
 - Not built yet: the code was written without access to Maven Central. If the first `mvn package` complains, the likely suspects are the versions in `pom.xml` (`quarkus.platform.version`, `quarkus-mcp-server.version`).
 - No authentication; put it behind a gateway before exposing it.
 - Two simultaneous bookings of the same slot could both pass the overlap check; add a unique constraint or locking if that matters.
+
+
+## Agent-to-agent demo
+
+This application has an agent that takes part in a referral across DuckClinic, the Duck Physical Therapy Clinic and DuckInsurance. The design, tools, policies and limits are in `README-agents.md` of the DuckInsurance project (copied here as `README-agents.md`). Model settings: copy `llm.env.example` to `llm.env`.

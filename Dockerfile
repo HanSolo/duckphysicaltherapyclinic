@@ -13,6 +13,8 @@ WORKDIR /app
 COPY --from=build --chown=clinic:clinic /build/target/quarkus-app/ /app/
 USER clinic
 ENV QUARKUS_DATASOURCE_JDBC_URL="jdbc:h2:file:/data/clinic;DB_CLOSE_DELAY=-1"
+# Ollama on the host; llm.env (see compose.yaml) overrides this
+ENV LLM_BASE_URL="http://host.docker.internal:11434"
 VOLUME /data
 EXPOSE 8082
 ENTRYPOINT ["java", "-jar", "/app/quarkus-run.jar"]
