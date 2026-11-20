@@ -41,7 +41,7 @@ import java.util.logging.Logger;
  *   <li>{@link #start}: a referral arrived (trigger).</li>
  *   <li>{@link #gather}: finds the duck, the catalogue and the free slots (action, pure code).</li>
  *   <li>{@link #judge}: the language model picks treatment, therapist and number of sessions, the code clamps it to the policy (decision).</li>
- *   <li>{@link #negotiate}: asks the insurer for pre-authorization and answers its questions, which may mean fetching the referral document from the referring clinic (action).</li>
+ *   <li>{@link #negotiate}: asks the insurer for pre-authorization and answers its questions inside the same call (MCP multi round-trip), which may mean fetching the referral document from the referring clinic, which asks us to confirm the release (action).</li>
  *   <li>{@link #record}: books only the approved sessions and reports to the referring clinic (outcome).</li>
  *   <li>{@link #fallBack}: if something fails, nothing is booked and the referring clinic is told (exception handler).</li>
  * </ol>
@@ -188,29 +188,49 @@ public class TherapyAgent {
         return slots;
     }
 
-    /** Asks the insurer. It may ask for the referral document first: then the clinic agent is asked for it and the insurer is asked again. */
+    /**
+     * Asks the insurer. It decides whether it needs more: if the referral document is missing it answers inside the same call with a question (MCP multi round-trip request, input_required),
+     * and {@link #insurerQuestions} answers it. The document is not ours to give, so the answer is fetched from the referring clinic, which in turn asks us to confirm the release.
+     */
     JsonNode negotiate(final Referral r, final Facts f, final Choice c, final List<LocalDateTime> slots) {
-        String document = null;
-        for (int round = 1; round <= 3; round++) {
-            final ObjectNode args = mapper.createObjectNode();
-            args.put("referralId", r.referralId()).put("ownerLastName", r.ownerLastName()).put("duckName", f.duck().name()).put("provider", "Duck Physical Therapy Clinic").put("treatmentName", c.treatment().name()).put("diagnosis", r.diagnosis());
-            args.put("sessions", slots.size()).put("pricePerSession", c.treatment().price().doubleValue()).put("firstSession", slots.get(0).toLocalDate().toString());
-            if (document != null) { args.put("referralDocument", document); }
-            log.say(r.referralId(), "Insurance Agent", "REQUEST", "Will you pay for " + slots.size() + " x " + c.treatment().name() + " at " + c.treatment().price() + " EUR for " + f.duck().name() + " (owner " + r.ownerLastName() + "), first session " + slots.get(0).toLocalDate() + "? " + (document == null ? "No referral document attached." : "Referral document attached."));
-            final JsonNode answer = mcp.call(insurerUrl, "therapy-agent:" + secret, "request_preauthorization", args, LONG);
-            final String   status = answer.path("status").asText("?");
-            if (status.equals("NEEDS_INFO") && document == null && containsText(answer.path("missing"), "referralDocument")) {
-                log.say(r.referralId(), null, "THOUGHT", "The insurer wants the referral document before it decides. It is not ours to give: asking the referring clinic's agent. (" + answer.path("reason").asText() + ")");
-                log.say(r.referralId(), "Clinic Agent", "REQUEST", "DuckInsurance needs the referral document of " + r.referralId() + " for the pre-authorization. May I have it?");
-                final ObjectNode docArgs = mapper.createObjectNode().put("referralId", r.referralId());
-                document = mcp.call(clinicUrl, null, "get_referral_document", docArgs, SHORT).path("document").asText("");
-                if (document.isBlank()) { throw new Refused("NOT_COVERED", "The referring clinic did not release the referral document, so the insurer cannot decide."); }
-                continue;
-            }
-            if (status.equals("NEEDS_INFO")) { throw new Refused("NOT_COVERED", "The insurer needs more information than we can give: " + answer.path("reason").asText()); }
-            return answer;
+        final ObjectNode args = mapper.createObjectNode();
+        args.put("referralId", r.referralId()).put("ownerLastName", r.ownerLastName()).put("duckName", f.duck().name()).put("provider", "Duck Physical Therapy Clinic").put("treatmentName", c.treatment().name()).put("diagnosis", r.diagnosis());
+        args.put("sessions", slots.size()).put("pricePerSession", c.treatment().price().doubleValue()).put("firstSession", slots.get(0).toLocalDate().toString());
+        log.say(r.referralId(), "Insurance Agent", "REQUEST", "Will you pay for " + slots.size() + " x " + c.treatment().name() + " at " + c.treatment().price() + " EUR for " + f.duck().name() + " (owner " + r.ownerLastName() + "), first session " + slots.get(0).toLocalDate() + "? I attach no referral document unless you ask for it.");
+        final JsonNode answer = mcp.call(insurerUrl, "therapy-agent:" + secret, "request_preauthorization", args, LONG, (key, request) -> insurerQuestions(r, key, request));
+        if (answer.path("status").asText().equals("NEEDS_INFO")) { throw new Refused("NOT_COVERED", "The insurer needs more information than we can give: " + answer.path("reason").asText()); }
+        return answer;
+    }
+
+    /** The insurer's question inside request_preauthorization. Only the referral document is answered, anything else is declined. */
+    private ObjectNode insurerQuestions(final Referral r, final String key, final JsonNode request) {
+        if (!key.equals("referralDocument")) {
+            log.say(r.referralId(), "Insurance Agent", "ANSWER", "I decline your question '" + key + "': " + request.path("params").path("message").asText());
+            return mcp.decline();
         }
-        throw new IllegalStateException("The insurer kept asking for more information");
+        log.say(r.referralId(), null, "THOUGHT", "The insurer asks for the referral document inside the same call (MCP input_required): \"" + request.path("params").path("message").asText() + "\" It is not ours to give: asking the referring clinic's agent.");
+        log.say(r.referralId(), "Clinic Agent", "REQUEST", "DuckInsurance needs the referral document of " + r.referralId() + " for the pre-authorization. May I have it?");
+        final ObjectNode docArgs = mapper.createObjectNode().put("referralId", r.referralId());
+        final String document = mcp.call(clinicUrl, null, "get_referral_document", docArgs, SHORT, (clinicKey, clinicRequest) -> clinicQuestions(r, clinicKey, clinicRequest)).path("document").asText("");
+        if (document.isBlank()) {
+            log.say(r.referralId(), "Insurance Agent", "ANSWER", "I cannot provide the referral document.");
+            return mcp.decline();
+        }
+        log.say(r.referralId(), "Insurance Agent", "ANSWER", "Here is the referral document of " + r.referralId() + " (" + document.length() + " characters).");
+        return mcp.accept(mapper.createObjectNode().put("referralDocument", document));
+    }
+
+    /**
+     * The clinic's question inside get_referral_document: "do you confirm the release?". This agent confirms because it holds the referral (the clinic sent it) and the insurer asked for the document for the pre-authorization.
+     * Anything else is declined.
+     */
+    private ObjectNode clinicQuestions(final Referral r, final String key, final JsonNode request) {
+        if (!key.equals("confirm") || plans.get(r.referralId()) == null) {
+            log.say(r.referralId(), "Clinic Agent", "ANSWER", "I decline your question '" + key + "'.");
+            return mcp.decline();
+        }
+        log.say(r.referralId(), "Clinic Agent", "ANSWER", "Yes, please release it: the insurer needs it for the pre-authorization of " + r.referralId() + " and I hold this referral.");
+        return mcp.accept(mapper.createObjectNode().put("confirm", true));
     }
 
     void record(final Referral r, final Facts f, final Choice c, final List<LocalDateTime> slots, final JsonNode answer) {
@@ -308,11 +328,6 @@ public class TherapyAgent {
         final String text = diagnosis.toLowerCase();
         final String wanted = text.matches(".*(wing).*") ? "Wing Mobilisation" : text.matches(".*(foot|leg|lame|limp).*") ? "Underwater Treadmill" : text.matches(".*(inflam|swell).*") ? "Laser Therapy" : "Hydrotherapy Session";
         return treatments.stream().filter(t -> t.name().equals(wanted)).findFirst().orElse(treatments.get(0));
-    }
-
-    private static boolean containsText(final JsonNode array, final String text) {
-        for (final JsonNode n : array) { if (text.equals(n.asText())) { return true; } }
-        return false;
     }
 
     private static String list(final List<String> items) { return items.isEmpty() ? "none" : String.join("; ", items); }
