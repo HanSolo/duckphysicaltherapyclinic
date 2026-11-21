@@ -103,6 +103,16 @@ public class ClinicService {
         return toView(appointment);
     }
 
+    /** Cancels a booked appointment, which frees the slot. A completed appointment cannot be cancelled. */
+    @Transactional
+    public AppointmentView cancel(final Long appointmentId) {
+        final Appointment appointment = Appointment.findById(appointmentId);
+        if (appointment == null) { throw ClinicException.notFound("Appointment", appointmentId); }
+        if (appointment.status != AppointmentStatus.BOOKED) { throw ClinicException.invalid("Only a booked appointment can be cancelled, this one is " + appointment.status); }
+        appointment.status = AppointmentStatus.CANCELLED;
+        return toView(appointment);
+    }
+
     /** Is the slot inside opening hours and free for the therapist and the duck? The same rules as {@link #book}, answered with true or false. */
     @Transactional
     public boolean isFree(final Long duckId, final Long therapistId, final Long treatmentId, final LocalDateTime startTime) {

@@ -14,7 +14,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @ApplicationScoped
 public class PlanStore {
 
-    /** One referral as seen by the clinic. status: RECEIVED, PLANNING, SCHEDULED, NOT_COVERED, REJECTED, IN_TREATMENT, COMPLETED. */
+    /** One referral as seen by the clinic. status: RECEIVED, PLANNING, SCHEDULED, NOT_COVERED, REJECTED, IN_TREATMENT, COMPLETED, CANCELLED. */
     public static class Plan {
         public String         referralId;
         public String         duckName;

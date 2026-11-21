@@ -41,12 +41,15 @@ public class AgentTools {
         return new Receipt(referralId.strip(), "RECEIVED", "Planning has started, the result follows with report_referral_status.");
     }
 
-    @Tool(name = "get_plan_status", description = "Shows how a referral is going in the physical therapy clinic: RECEIVED, PLANNING, SCHEDULED, NOT_COVERED, REJECTED, IN_TREATMENT or COMPLETED.")
+    @Tool(name = "get_plan_status", description = "Shows how a referral is going in the physical therapy clinic: RECEIVED, PLANNING, SCHEDULED, NOT_COVERED, REJECTED, IN_TREATMENT, COMPLETED or CANCELLED.")
     PlanStatus getPlanStatus(@ToolArg(description = "Referral id, like REF-0001") final String referralId) {
         final Plan plan = referralId == null ? null : plans.get(referralId.strip());
         if (plan == null) { throw ClinicException.notFound("Referral", referralId); }
         return new PlanStatus(plan.referralId, plan.status, plan.message, plan.treatmentName, plan.preauthorization, plan.requestedSessions, plan.appointmentIds.size(), plan.completedSessions);
     }
+
+    @Tool(name = "cancel_referral", description = "The referring clinic cancels a scheduled referral. Sessions that are completed stay billed, the sessions that are still booked are cancelled, the insurer releases the coverage reserved for them and the referring clinic hears CANCELLED. Only a scheduled referral can be cancelled.")
+    String cancelReferral(@ToolArg(description = "Referral id, like REF-0001") final String referralId, @ToolArg(description = "Why the referral is cancelled", required = false) final String reason) { return agent.cancelReferral(referralId, reason); }
 
     @Tool(name = "complete_appointment", description = "Marks a booked appointment as completed after the session took place. If it belongs to a referral, the clinic's agent bills the insurer for the session.")
     String completeAppointment(@ToolArg(description = "Id of the appointment") final Long appointmentId) { return agent.completeAppointment(appointmentId); }

@@ -142,7 +142,7 @@ public class TherapyAgent {
                 Treatments (id: name, minutes, price): %s
                 Therapists (id: name, specialty): %s
 
-                Choose one treatment, one therapist and the number of sessions (1 to %d).
+                The owner's consent is on file and the duck is in our records: the code checked this before asking you. Do not question the referral. Choose one treatment, one therapist and the number of sessions (1 to %d).
                 """.formatted(policyText(), r.referringClinic(), f.duck().name(), f.duck().breed(), r.diagnosis(), r.requestedSessions(), list(f.treatments().stream().map(t -> t.id() + ": " + t.name() + ", " + t.durationMinutes() + " min, " + t.price() + " EUR").toList()), list(f.therapists().stream().map(t -> t.id() + ": " + t.name() + ", " + t.specialty()).toList()), limit);
         log.say(r.referralId(), null, "THOUGHT", "Asking the language model which treatment fits the diagnosis (policy: one treatment, at most " + limit + " sessions, from our catalogue).");
         TreatmentView treatment = null;
@@ -331,10 +331,46 @@ public class TherapyAgent {
         return plan.message;
     }
 
+    /**
+     * Cancels a scheduled referral. The rule: sessions that are completed stay completed and billed, every session that is still booked is cancelled, and the insurer is asked to release the coverage
+     * that was reserved for those sessions. The referring clinic hears CANCELLED. A referral that is still being planned or was never approved has nothing to cancel.
+     */
+    public String cancelReferral(final String referralId, final String reason) {
+        final Plan plan = referralId == null ? null : plans.get(referralId.strip());
+        if (plan == null) { throw ClinicException.notFound("Referral", referralId); }
+        if (!plan.status.equals("SCHEDULED") && !plan.status.equals("IN_TREATMENT")) { throw ClinicException.invalid("The referral " + plan.referralId + " is " + plan.status + ", there is nothing to cancel"); }
+        final String id  = plan.referralId;
+        final String why = reason == null || reason.isBlank() ? "no reason given" : reason.strip();
+        log.say(id, null, "THOUGHT", "Cancellation requested (" + why + "). My rule: completed sessions stay billed, booked sessions are cancelled, and the insurer releases the coverage reserved for them.");
+        int cancelled = 0;
+        for (final Long appointmentId : plan.appointmentIds) {
+            if (clinic.get(appointmentId).status() == AppointmentStatus.BOOKED) {
+                clinic.cancel(appointmentId);
+                cancelled++;
+            }
+        }
+        log.say(id, null, "ACTION", cancelled + " booked session(s) cancelled, " + plan.completedSessions + " completed session(s) stay.");
+        log.say(id, "Insurance Agent", "REQUEST", "Please release the coverage of pre-authorization " + plan.preauthorization + " for the " + cancelled + " cancelled session(s): " + why + ".");
+        final ObjectNode args = mapper.createObjectNode().put("referralId", id).put("reason", why);
+        String insurerNote;
+        try {
+            final JsonNode released = mcp.call(insurerUrl, "therapy-agent:" + secret, "release_preauthorization", args, SHORT);
+            insurerNote = "The insurer released " + released.path("releasedSessions").asText("?") + " session(s), " + released.path("releasedAmount").asText("?") + " EUR of coverage.";
+        } catch (McpCallException | IllegalStateException e) {
+            log.say(id, null, "ERROR", "The insurer did not release the coverage: " + e.getMessage());
+            insurerNote = "The insurer did not release the coverage: " + e.getMessage();
+        }
+        plan.status  = "CANCELLED";
+        plan.message = cancelled + " booked session(s) cancelled, " + plan.completedSessions + " completed stay billed. " + insurerNote;
+        report(id, "CANCELLED", plan.message, null);
+        return plan.message;
+    }
+
     /** The next booked session of a referral, for the demo button. */
     public String completeNext(final String referralId) {
         final Plan plan = plans.find(referralId);
         if (plan == null) { throw ClinicException.invalid("There is no referral to treat" + (referralId == null || referralId.isBlank() ? "" : ": " + referralId)); }
+        if (plan.status.equals("CANCELLED")) { throw ClinicException.invalid("The referral " + plan.referralId + " was cancelled, no session is left to complete"); }
         for (final Long id : plan.appointmentIds) {
             if (clinic.get(id).status() == AppointmentStatus.BOOKED) { return completeAppointment(id); }
         }
