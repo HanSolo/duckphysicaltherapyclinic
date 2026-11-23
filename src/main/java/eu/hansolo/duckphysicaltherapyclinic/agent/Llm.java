@@ -25,7 +25,7 @@ import java.time.Duration;
  *   <li>{@code openai}: the Chat Completions API (POST {base}/chat/completions, Bearer key): OpenAI, Groq, OpenRouter, Mistral, Ollama's /v1 and other services in that format.
  *       LLM_BASE_URL includes the version path, for example https://api.openai.com/v1.</li>
  * </ul>
- * Settings: LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY (anthropic, openai), LLM_MAX_TOKENS (anthropic: default 1024; openai: sent only if set).
+ * Settings: LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY (anthropic, openai), LLM_MAX_TOKENS (anthropic: default 4096; openai: sent only if set).
  */
 @ApplicationScoped
 public class Llm {
@@ -81,16 +81,23 @@ public class Llm {
     private String askAnthropic(final String prompt) {
         final ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
-        body.put("max_tokens", maxTokens > 0 ? maxTokens : 1024);
+        body.put("max_tokens", maxTokens > 0 ? maxTokens : 4096);   // 1024 was too small for thinking models on Ollama
         body.putArray("messages").addObject().put("role", "user").put("content", prompt);
         try {
-            final HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$", "") + "/v1/messages")).timeout(Duration.ofSeconds(timeoutSeconds))
+            final HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$", "").replaceAll("/v1$", "") + "/v1/messages")).timeout(Duration.ofSeconds(timeoutSeconds))
                                                    .header("content-type", "application/json").header("x-api-key", apiKey).header("anthropic-version", "2023-06-01")
                                                    .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build();
-            final JsonNode      node = send(request);
-            final StringBuilder text = new StringBuilder();
+            final JsonNode      node  = send(request);
+            final StringBuilder text  = new StringBuilder();
+            final StringBuilder kinds = new StringBuilder();
             for (JsonNode block : node.path("content")) {
+                kinds.append(kinds.isEmpty() ? "" : ", ").append(block.path("type").asText("?"));
                 if ("text".equals(block.path("type").asText())) { text.append(block.path("text").asText("")); }
+            }
+            if (text.toString().replaceAll("(?s)<think>.*?</think>", "").isBlank()) {
+                final String stop = node.path("stop_reason").asText("unknown");
+                throw new IllegalStateException("The model returned no text (stop_reason " + stop + ", content blocks: " + (kinds.isEmpty() ? "none" : kinds) + ")."
+                                                + ("max_tokens".equals(stop) ? " The answer limit of " + (maxTokens > 0 ? maxTokens : 4096) + " tokens was used up, probably by the model's thinking: raise LLM_MAX_TOKENS, or for Ollama use LLM_PROVIDER=ollama, which switches thinking off." : ""));
             }
             return answer(text.toString());
         } catch (IOException e) {
