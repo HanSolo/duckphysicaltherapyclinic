@@ -22,8 +22,10 @@ import java.time.Duration;
  *       so that the reply is short and parseable.</li>
  *   <li>{@code anthropic} (or {@code claude}): the Anthropic Messages API (POST /v1/messages, no streaming), for example Claude at https://api.anthropic.com.
  *       The prompt already asks for JSON, and {@link #json} takes the first JSON object from the answer.</li>
+ *   <li>{@code openai}: the Chat Completions API (POST {base}/chat/completions, Bearer key): OpenAI, Groq, OpenRouter, Mistral, Ollama's /v1 and other services in that format.
+ *       LLM_BASE_URL includes the version path, for example https://api.openai.com/v1.</li>
  * </ul>
- * Settings: LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY (Anthropic only), LLM_MAX_TOKENS (Anthropic only).
+ * Settings: LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY (anthropic, openai), LLM_MAX_TOKENS (anthropic: default 1024; openai: sent only if set).
  */
 @ApplicationScoped
 public class Llm {
@@ -35,7 +37,7 @@ public class Llm {
     String       model;
     @ConfigProperty(name = "duck.llm.api-key", defaultValue = "ollama")
     String       apiKey;
-    @ConfigProperty(name = "duck.llm.max-tokens", defaultValue = "1024")
+    @ConfigProperty(name = "duck.llm.max-tokens", defaultValue = "0")
     int          maxTokens;
     @ConfigProperty(name = "duck.llm.timeout-seconds")
     int          timeoutSeconds;
@@ -49,8 +51,9 @@ public class Llm {
     public String ask(final String prompt) {
         return switch (provider.strip().toLowerCase()) {
             case "anthropic", "claude" -> askAnthropic(prompt);
+            case "openai"              -> askOpenAi(prompt);
             case "ollama"              -> askOllama(prompt);
-            default                    -> throw new IllegalStateException("Unknown LLM_PROVIDER '" + provider + "'; use ollama or anthropic");
+            default                    -> throw new IllegalStateException("Unknown LLM_PROVIDER '" + provider + "'; use ollama, anthropic or openai");
         };
     }
 
@@ -78,7 +81,7 @@ public class Llm {
     private String askAnthropic(final String prompt) {
         final ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
-        body.put("max_tokens", maxTokens);
+        body.put("max_tokens", maxTokens > 0 ? maxTokens : 1024);
         body.putArray("messages").addObject().put("role", "user").put("content", prompt);
         try {
             final HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$", "") + "/v1/messages")).timeout(Duration.ofSeconds(timeoutSeconds))
@@ -90,6 +93,26 @@ public class Llm {
                 if ("text".equals(block.path("type").asText())) { text.append(block.path("text").asText("")); }
             }
             return answer(text.toString());
+        } catch (IOException e) {
+            throw new IllegalStateException("The model at " + baseUrl + " is not reachable: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the model", e);
+        }
+    }
+
+    /** One user message to an OpenAI-format Chat Completions API; the text of the first choice. */
+    private String askOpenAi(final String prompt) {
+        final ObjectNode body = mapper.createObjectNode();
+        body.put("model", model);
+        if (maxTokens > 0) { body.put("max_tokens", maxTokens); }   // only if set: newer OpenAI models reject max_tokens
+        body.putArray("messages").addObject().put("role", "user").put("content", prompt);
+        try {
+            final HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl.replaceAll("/+$", "") + "/chat/completions")).timeout(Duration.ofSeconds(timeoutSeconds))
+                                                   .header("content-type", "application/json").header("authorization", "Bearer " + apiKey)
+                                                   .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build();
+            final JsonNode node = send(request);
+            return answer(node.path("choices").path(0).path("message").path("content").asText(""));
         } catch (IOException e) {
             throw new IllegalStateException("The model at " + baseUrl + " is not reachable: " + e.getMessage(), e);
         } catch (InterruptedException e) {
